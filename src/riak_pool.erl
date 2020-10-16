@@ -21,8 +21,7 @@
     min_size => pos_integer(),
     max_size => pos_integer(),
     idle_removal_interval_secs => non_neg_integer(),
-    max_idle_secs => non_neg_integer(),
-    start_mfa => {module(), atom(), list()}
+    max_idle_secs => non_neg_integer()
 }.
 
 -type opts()    ::  #{}.
@@ -76,7 +75,7 @@
 -spec start() -> ok.
 
 start() ->
-    Mod = riak_pool_config:get(backend_module),
+    Mod = riak_pool_config:get(backend_mod),
     Mod:start().
 
 
@@ -87,7 +86,7 @@ start() ->
 -spec stop() -> ok.
 
 stop() ->
-    Mod = riak_pool_config:get(backend_module),
+    Mod = riak_pool_config:get(backend_mod),
     Mod:stop().
 
 
@@ -99,7 +98,7 @@ stop() ->
     ok | {error, any()}.
 
 add_pool(Poolname, Config) ->
-    Mod = riak_pool_config:get(backend_module),
+    Mod = riak_pool_config:get(backend_mod),
     Mod:add_pool(Poolname, Config).
 
 
@@ -110,7 +109,7 @@ add_pool(Poolname, Config) ->
 -spec remove_pool(Poolname :: atom()) -> ok | {error, any()}.
 
 remove_pool(Poolname) ->
-    Mod = riak_pool_config:get(backend_module),
+    Mod = riak_pool_config:get(backend_mod),
     Mod:remove_pool(Poolname).
 
 
@@ -133,7 +132,7 @@ checkout(Poolname) ->
     {ok, pid()} | {error, any()} | no_return().
 
 checkout(Poolname, Opts) ->
-    Mod = riak_pool_config:get(backend_module),
+    Mod = riak_pool_config:get(backend_mod),
     Mod:checkout(Poolname, Opts).
 
 
@@ -144,7 +143,7 @@ checkout(Poolname, Opts) ->
 -spec checkin(Poolname :: atom(), Pid :: pid()) -> ok.
 
 checkin(Poolname, Pid) ->
-    Mod = riak_pool_config:backend_module(),
+    Mod = riak_pool_config:backend_mod(),
     Mod:checkin(Poolname, Pid, ok).
 
 
@@ -157,5 +156,5 @@ checkin(Poolname, Pid) ->
     ok.
 
 checkin(Poolname, Pid, Status) ->
-    Mod = riak_pool_config:backend_module(),
+    Mod = riak_pool_config:backend_mod(),
     Mod:checkin(Poolname, Pid, Status).

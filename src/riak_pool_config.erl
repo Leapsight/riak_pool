@@ -40,6 +40,12 @@
 %% -----------------------------------------------------------------------------
 init() ->
     ok = app_config:init(?APP, #{callback_mod => ?MODULE}),
+    case ?MODULE:get(backend_mod, undefined) of
+        undefined ->
+            set(backend_mod, riak_pool_pooler);
+        _ ->
+            ok
+    end,
     ok.
 
 

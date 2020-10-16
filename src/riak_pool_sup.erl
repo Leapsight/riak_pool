@@ -39,6 +39,7 @@
 
 start_link() ->
     ok = riak_pool_config:init(),
+    ok = riak_pool:start(),
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 
