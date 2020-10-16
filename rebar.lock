@@ -1,0 +1,16 @@
+{"1.2.0",
+[{<<"app_config">>,
+  {git,"https://gitlab.com/leapsight/app_config.git",
+       {ref,"6c3f354d0b8769be3b7c6b9dad6d66220f520da9"}},
+  0},
+ {<<"key_value">>,
+  {git,"https://gitlab.com/leapsight/key_value.git",
+       {ref,"8fffd1b7ca520cf488251c9d32ffd0959c2ab039"}},
+  1},
+ {<<"pooler">>,{pkg,<<"pooler">>,<<"1.5.3">>},0}]}.
+[
+{pkg_hash,[
+ {<<"pooler">>, <<"898CD1FA301FC42D4A8ED598CE139B71CA85B54C16AB161152B5CC5FBDCFA1A8">>}]},
+{pkg_hash_ext,[
+ {<<"pooler">>, <<"058D85C5081289B90E97E4DDDBC3BB5A3B4A19A728AB3BC88C689EFCC36A07C7">>}]}
+].

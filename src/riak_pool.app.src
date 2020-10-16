@@ -5,7 +5,8 @@
   {mod, {riak_pool_app, []}},
   {applications,
    [kernel,
-    stdlib
+    stdlib,
+    app_config
    ]},
   {env,[]},
   {modules, []},
