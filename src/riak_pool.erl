@@ -146,7 +146,7 @@ checkout(Poolname, Opts) ->
 -spec checkin(Poolname :: atom(), Pid :: pid()) -> ok.
 
 checkin(Poolname, Pid) ->
-    Mod = riak_pool_config:backend_mod(),
+    Mod = riak_pool_config:get(backend_mod),
     Mod:checkin(Poolname, Pid, ok).
 
 
@@ -159,7 +159,7 @@ checkin(Poolname, Pid) ->
     ok.
 
 checkin(Poolname, Pid, Status) ->
-    Mod = riak_pool_config:backend_mod(),
+    Mod = riak_pool_config:get(backend_mod),
     Mod:checkin(Poolname, Pid, Status).
 
 
