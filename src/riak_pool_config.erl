@@ -45,8 +45,7 @@ init() ->
             set(backend_mod, riak_pool_pooler);
         _ ->
             ok
-    end,
-    ok.
+    end.
 
 
 %% -----------------------------------------------------------------------------
@@ -77,7 +76,6 @@ get(Key, Default) ->
 
 set(Key, Value) ->
     app_config:set(?APP, Key, Value).
-
 
 
 
