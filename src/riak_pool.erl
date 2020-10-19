@@ -177,8 +177,12 @@ execute(Poolname, Fun, Opts)  ->
     case checkout(Poolname, Opts) of
         {ok, Pid} ->
             try
-                {true, Fun(Pid)}
+                Result = Fun(Pid),
+                ok = checkin(Pid, ok),
+                {true, Result}
             catch
+                _:Reason when Reason == timeout orelse Reason == overload ->
+                    ok = checkin(Pid, Reason);
                 _:Reason:Stacktrace ->
                     ok = checkin(Pid, ok),
                     error(Reason, Stacktrace)
