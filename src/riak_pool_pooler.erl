@@ -2,7 +2,7 @@
 -behaviour(riak_pool).
 
 
-
+%% BEHAVIOUR CALLBACKS
 -export([add_pool/2]).
 -export([checkin/3]).
 -export([checkout/2]).
@@ -72,7 +72,7 @@ add_pool(Poolname, Config) ->
         %% node
         %% {group, ?MODULE},
         {name, Poolname},
-        {start_mfa, {riakc_pb_socket, start_link, [Host, Port]}},
+        {start_mfa, {?MODULE, new_connection, [Host, Port]}},
         {init_count, InitCount},
         {max_count, MaxCount},
         {max_age, MaxAge},
@@ -109,7 +109,13 @@ remove_pool(Poolname) ->
 
 checkout(Poolname, Opts) ->
     Timeout = maps:get(timeout, Opts, infinity),
-    pooler:take_member(Poolname, Timeout).
+    case pooler:take_member(Poolname, Timeout) of
+        Pid when is_pid(Pid) ->
+            {ok, Pid};
+        error_no_members ->
+            {error, busy}
+    end.
+
 
 
 %% -----------------------------------------------------------------------------
@@ -120,6 +126,7 @@ checkout(Poolname, Opts) ->
     ok.
 
 checkin(Poolname, Pid, Status) ->
+    %% TODO Check for overload status and implement backpreassure
     pooler:return_member(Poolname, Pid, coerce_status(Status)).
 
 
@@ -134,3 +141,14 @@ checkin(Poolname, Pid, Status) ->
 coerce_status(ok) -> ok;
 coerce_status(fail) -> fail;
 coerce_status(_) -> fail.
+
+
+%% @private
+new_connection(Host, Port) ->
+    case riakc_pb_socket:start_link(Host, Port) of
+        {ok, Pid} ->
+            {ok, Pid};
+        {error, _} = Error ->
+             %% TODO Check for errors and implement backpreassure
+            Error
+    end.

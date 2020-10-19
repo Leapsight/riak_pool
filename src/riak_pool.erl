@@ -34,6 +34,7 @@
 -export([checkin/3]).
 -export([checkout/1]).
 -export([checkout/2]).
+-export([execute/3]).
 -export([remove_pool/1]).
 -export([start/0]).
 -export([stop/0]).
@@ -55,7 +56,9 @@
 -callback remove_pool(Poolname :: atom()) -> ok | {error, any()}.
 
 -callback checkout(Poolname :: atom(), Opts :: opts()) ->
-    {ok, pid()} | {error, any()} | no_return().
+    {ok, pid()}
+    | {error, busy | any()}
+    | no_return().
 
 -callback checkin(
     Poolname :: atom(), Pid :: pid(), Status :: atom()) -> ok.
@@ -158,3 +161,37 @@ checkin(Poolname, Pid) ->
 checkin(Poolname, Pid, Status) ->
     Mod = riak_pool_config:backend_mod(),
     Mod:checkin(Poolname, Pid, Status).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Executes a number of operations using the same Riak client connection.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec execute(
+    Poolname :: atom(),
+    Fun :: fun((RiakConn :: pid()) -> Result :: any()),
+    Opts :: map()) ->
+    {true, Result :: any()} | {false, Reason :: any()} | no_return().
+
+execute(Poolname, Fun, Opts)  ->
+    case checkout(Poolname, Opts) of
+        {ok, Pid} ->
+            try
+                {true, Fun(Pid)}
+            catch
+                _:Reason:Stacktrace ->
+                    ok = checkin(Pid, ok),
+                    error(Reason, Stacktrace)
+            end;
+        {error, Reason} ->
+            {false, Reason}
+    end.
+
+
+
+
+
+
+%% =============================================================================
+%% PRIVATE
+%% =============================================================================
