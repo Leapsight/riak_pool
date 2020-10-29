@@ -24,7 +24,7 @@
     max_idle_secs => non_neg_integer()
 }.
 
--type opts()    ::  #{}.
+-type opts()    ::  #{timeout => timeout()}.
 
 -export_type([config/0]).
 -export_type([opts/0]).
