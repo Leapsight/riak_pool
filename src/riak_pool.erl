@@ -121,7 +121,7 @@ remove_pool(Poolname) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec checkout(Poolname :: atom()) ->
-    {ok, pid()} | {error, any()} | no_return().
+    {ok, pid()} | {error, any()}.
 
 checkout(Poolname) ->
     checkout(Poolname, #{}).
@@ -132,7 +132,7 @@ checkout(Poolname) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec checkout(Poolname :: atom(), Opts :: opts()) ->
-    {ok, pid()} | {error, any()} | no_return().
+    {ok, pid()} | {error, any()}.
 
 checkout(Poolname, Opts) ->
     Mod = riak_pool_config:get(backend_mod),

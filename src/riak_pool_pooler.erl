@@ -108,7 +108,7 @@ remove_pool(Poolname) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec checkout(Poolname :: atom(), Opts :: riak_pool:opts()) ->
-    {ok, pid()} | {error, any()} | no_return().
+    {ok, pid()} | {error, any()}.
 
 checkout(Poolname, Opts) ->
     Timeout = maps:get(timeout, Opts, infinity),
