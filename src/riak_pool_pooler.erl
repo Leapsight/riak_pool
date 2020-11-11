@@ -67,8 +67,8 @@ add_pool(Poolname, Config) ->
     ),
     %% Time limit for member starts.
     MemberStartTimeout = {1, min},
-    Host = riak_pool_config:get(riak_host, "127.0.0.1"),
-    Port = riak_pool_config:get(riak_port, 8087),
+    Host = host(Config),
+    Port = port(Config),
 
     PoolerConfig = [
         %% We add group just in case pooler is being used by other app in the
@@ -99,7 +99,7 @@ add_pool(Poolname, Config) ->
 -spec remove_pool(Poolname :: atom()) -> ok | {error, any()}.
 
 remove_pool(Poolname) ->
-    pooler:remove_pool(Poolname).
+    pooler:rm_pool(Poolname).
 
 
 
@@ -155,3 +155,19 @@ new_connection(Host, Port) ->
              %% TODO Check for errors and implement backpreassure
             Error
     end.
+
+
+%% @private
+host(#{riak_host := Val}) ->
+    Val;
+
+host(_) ->
+    riak_pool_config:get(riak_host, "127.0.0.1").
+
+
+%% @private
+port(#{riak_port := Val}) ->
+    Val;
+
+port(_) ->
+    riak_pool_config:get(riak_port, 8087).

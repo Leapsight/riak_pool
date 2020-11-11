@@ -3,11 +3,23 @@
   {git,"https://gitlab.com/leapsight/app_config.git",
        {ref,"6c3f354d0b8769be3b7c6b9dad6d66220f520da9"}},
   0},
+ {<<"hamcrest">>,
+  {git,"https://github.com/basho/hamcrest-erlang.git",
+       {ref,"ad3dbab419762fc2d5821abb88b989da006b85c6"}},
+  2},
  {<<"key_value">>,
   {git,"https://gitlab.com/leapsight/key_value.git",
        {ref,"8fffd1b7ca520cf488251c9d32ffd0959c2ab039"}},
   1},
- {<<"pooler">>,{pkg,<<"pooler">>,<<"1.5.3">>},0}]}.
+ {<<"pooler">>,{pkg,<<"pooler">>,<<"1.5.3">>},0},
+ {<<"riak_pb">>,
+  {git,"https://github.com/basho/riak_pb",
+       {ref,"08771aba2ce4935b715d32d1b92555efdc3da994"}},
+  1},
+ {<<"riakc">>,
+  {git,"git://github.com/basho/riak-erlang-client.git",
+       {ref,"e4efcb7efd6ded616c5f1d7bae5ca36f9dee6bc2"}},
+  0}]}.
 [
 {pkg_hash,[
  {<<"pooler">>, <<"898CD1FA301FC42D4A8ED598CE139B71CA85B54C16AB161152B5CC5FBDCFA1A8">>}]},

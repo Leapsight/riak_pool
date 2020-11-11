@@ -100,9 +100,19 @@ stop() ->
 -spec add_pool(Poolname :: atom(), Config :: config()) ->
     ok | {error, any()}.
 
+add_pool(Poolname, #{backend_mod := Mod} = Config) ->
+    Key = {?MODULE, Poolname},
+    case persistent_term:get(Key, undefined) of
+        undefined ->
+            ok = persistent_term:put(Key, Config),
+            Mod:add_pool(Poolname, Config);
+        Existing ->
+            {error, {already_exists, Existing}}
+    end;
+
 add_pool(Poolname, Config) ->
     Mod = riak_pool_config:get(backend_mod),
-    Mod:add_pool(Poolname, Config).
+    add_pool(Poolname, Config#{backend_mod => Mod}).
 
 
 %% -----------------------------------------------------------------------------
@@ -112,8 +122,14 @@ add_pool(Poolname, Config) ->
 -spec remove_pool(Poolname :: atom()) -> ok | {error, any()}.
 
 remove_pool(Poolname) ->
-    Mod = riak_pool_config:get(backend_mod),
-    Mod:remove_pool(Poolname).
+    Key = {?MODULE, Poolname},
+    case persistent_term:get(Key, undefined) of
+        undefined ->
+            ok;
+        #{backend_mod := Mod} ->
+            _ = persistent_term:erase(Key),
+            Mod:remove_pool(Poolname)
+    end.
 
 
 %% -----------------------------------------------------------------------------
