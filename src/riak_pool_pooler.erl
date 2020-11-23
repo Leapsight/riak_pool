@@ -111,7 +111,7 @@ remove_pool(Poolname) ->
     {ok, pid()} | {error, any()}.
 
 checkout(Poolname, Opts) ->
-    Timeout = maps:get(timeout, Opts, infinity),
+    Timeout = maps:get(timeout, Opts, 60000),
     case pooler:take_member(Poolname, Timeout) of
         Pid when is_pid(Pid) ->
             {ok, Pid};
