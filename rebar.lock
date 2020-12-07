@@ -3,6 +3,7 @@
   {git,"https://gitlab.com/leapsight/app_config.git",
        {ref,"6c3f354d0b8769be3b7c6b9dad6d66220f520da9"}},
   0},
+ {<<"backoff">>,{pkg,<<"backoff">>,<<"1.1.6">>},0},
  {<<"hamcrest">>,
   {git,"https://github.com/basho/hamcrest-erlang.git",
        {ref,"ad3dbab419762fc2d5821abb88b989da006b85c6"}},
@@ -22,7 +23,9 @@
   0}]}.
 [
 {pkg_hash,[
+ {<<"backoff">>, <<"83B72ED2108BA1EE8F7D1C22E0B4A00CFE3593A67DBC792799E8CCE9F42F796B">>},
  {<<"pooler">>, <<"898CD1FA301FC42D4A8ED598CE139B71CA85B54C16AB161152B5CC5FBDCFA1A8">>}]},
 {pkg_hash_ext,[
+ {<<"backoff">>, <<"CF0CFFF8995FB20562F822E5CC47D8CCF664C5ECDC26A684CBE85C225F9D7C39">>},
  {<<"pooler">>, <<"058D85C5081289B90E97E4DDDBC3BB5A3B4A19A728AB3BC88C689EFCC36A07C7">>}]}
 ].

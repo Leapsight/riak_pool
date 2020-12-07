@@ -1,6 +1,7 @@
 -module(riak_pool_pooler).
 -behaviour(riak_pool).
 
+-define(DEFAULT_TIMEOUT, 60000).
 
 %% BEHAVIOUR CALLBACKS
 -export([add_pool/2]).
@@ -111,7 +112,7 @@ remove_pool(Poolname) ->
     {ok, pid()} | {error, any()}.
 
 checkout(Poolname, Opts) ->
-    Timeout = maps:get(timeout, Opts, 60000),
+    Timeout = maps:get(timeout, Opts, ?DEFAULT_TIMEOUT),
     case pooler:take_member(Poolname, Timeout) of
         Pid when is_pid(Pid) ->
             {ok, Pid};
