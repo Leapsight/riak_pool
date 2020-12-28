@@ -12,7 +12,7 @@
 -export([stop/0]).
 
 %% PRiVATE
--export([new_connection/2]).
+-export([new_connection/3]).
 
 
 
@@ -70,13 +70,14 @@ add_pool(Poolname, Config) ->
     MemberStartTimeout = {1, min},
     Host = host(Config),
     Port = port(Config),
+    RiakOpts = riak_opts(Config),
 
     PoolerConfig = [
         %% We add group just in case pooler is being used by other app in the
         %% node
         %% {group, ?MODULE},
         {name, Poolname},
-        {start_mfa, {?MODULE, new_connection, [Host, Port]}},
+        {start_mfa, {?MODULE, new_connection, [Host, Port, RiakOpts]}},
         {init_count, InitCount},
         {max_count, MaxCount},
         {max_age, MaxAge},
@@ -148,8 +149,8 @@ coerce_status(_) -> fail.
 
 
 %% @private
-new_connection(Host, Port) ->
-    case riakc_pb_socket:start_link(Host, Port) of
+new_connection(Host, Port, RiakOpts) ->
+    case riakc_pb_socket:start_link(Host, Port, RiakOpts) of
         {ok, Pid} ->
             {ok, Pid};
         {error, _} = Error ->
@@ -172,3 +173,16 @@ port(#{riak_port := Val}) ->
 
 port(_) ->
     riak_pool_config:get(riak_port, 8087).
+
+
+%% @private
+riak_opts(#{riak_opts := Val}) ->
+    Val;
+
+riak_opts(_) ->
+    riak_pool_config:get(riak_opts, [
+        {queue_if_disconnected, false},
+        {auto_reconnect, false},
+        {keepalive, true},
+        {connect_timeout, 2 * ?DEFAULT_TIMEOUT}
+    ]).
