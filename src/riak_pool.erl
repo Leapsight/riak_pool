@@ -20,6 +20,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 
+-define(CONNECTION_KEY, connection).
 
 -record(execute_state, {
     backoff             ::  backoff:backoff() | undefined,
@@ -54,6 +55,8 @@
 -export([checkout/1]).
 -export([checkout/2]).
 -export([execute/3]).
+-export([get_connection/0]).
+-export([has_connection/0]).
 -export([remove_pool/1]).
 -export([start/0]).
 -export([stop/0]).
@@ -199,7 +202,20 @@ checkin(Poolname, Pid, Status) ->
 
 
 %% -----------------------------------------------------------------------------
-%% @doc Executes a number of operations using the same Riak client connection.
+%% @doc Executes a number of operations using the same Riak client connection
+%% from pool `Poolname'.
+%% The connection will be passed to the function object `Fun' and also
+%% temporarily stored in the process dictionary for the duration of the call
+%% and it is accessible via the {@link get_connection/0} function.
+%%
+%% The function returns:
+%% * `{true, Result}' when a connection was succesfully checked out from the
+%% pool `Poolname'. `Result' is is the value of the last expression in
+%% `Fun'.
+%% * `{false, Reason}' when the a connection could not be obtained from the
+%% pool `Poolname'. `Reason' is `busy' when the pool runout of connections or `
+%% {error, Reason}' when it was a Riak connection error such as
+%% `{error, timeout}/ or `{error, overload}'.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec execute(
@@ -213,7 +229,24 @@ execute(Poolname, Fun, Opts)  ->
     execute(Poolname, Fun, Opts, State).
 
 
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec get_connection() -> undefined | pid().
 
+get_connection() ->
+    get(?CONNECTION_KEY).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec has_connection() -> boolean().
+
+has_connection() ->
+    get(?CONNECTION_KEY) =/= undefined.
 
 
 
@@ -223,7 +256,7 @@ execute(Poolname, Fun, Opts)  ->
 
 
 execute_state(Opts) ->
-    Timeout = maps:get(timeout, Opts, 2000),
+    Timeout = maps:get(timeout, Opts, 5000),
     Deadline = maps:get(deadline, Opts, 60000),
     MaxRetries = maps:get(max_retries, Opts, 3),
     Min = maps:get(retry_backoff_interval_min, Opts, 1000),
@@ -259,6 +292,9 @@ execute(Poolname, Fun, Opts, State)  ->
     case checkout(Poolname, Opts) of
         {ok, Pid} ->
             try
+                %% At the moment we do not support nested calls to this function
+                %% so if a connection existed this call will fail
+                undefined = put(?CONNECTION_KEY, Pid),
                 Result = Fun(Pid),
                 ok = checkin(Poolname, Pid, ok),
                 {true, Result}
@@ -273,6 +309,8 @@ execute(Poolname, Fun, Opts, State)  ->
                 _:EReason:Stacktrace ->
                     ok = checkin(Poolname, Pid, fail),
                     error(EReason, Stacktrace)
+            after
+                cleanup()
             end;
         {error, busy} ->
             Result = {false, busy},
@@ -298,7 +336,6 @@ maybe_retry(Poolname, Fun, Opts, State0, Result) ->
 
     case Deadline =< Now of
         true ->
-            io:format("D ~p Now ~p~n", [Deadline, Now]),
             Result;
         false ->
             %% We will retry
@@ -309,8 +346,17 @@ maybe_retry(Poolname, Fun, Opts, State0, Result) ->
                 message => "Will retry riak pool execute",
                 delay => Delay
             }),
-             io:format("Will retry in ~p~n", [Delay]),
             ok = timer:sleep(Delay),
             execute(Poolname, Fun, Opts, State1)
     end.
 
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+cleanup() ->
+    %% We cleanup the process dictionary
+    _ = erase(?CONNECTION_KEY),
+    ok.

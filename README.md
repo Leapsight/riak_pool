@@ -26,5 +26,5 @@ Config = #{
     idle_removal_interval_secs => 30,
     max_idle_secs => 30
 },
-ok = riak_pool:add_pool(my_pool, Config)
+ok = riak_pool:add_pool(my_pool, Config).
 ```
