@@ -1,0 +1,4 @@
+%% encoding: UTF-8
+{application,riak_pool}.
+{modules,[riak_pool,riak_pool_app,riak_pool_config,riak_pool_pooler,
+          riak_pool_pooler_metrics,riak_pool_sup]}.

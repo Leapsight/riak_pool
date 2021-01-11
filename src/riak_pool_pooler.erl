@@ -28,7 +28,7 @@
 -spec start() -> ok.
 
 start() ->
-    %% ok = pooler:start(),
+    ok = set_env(),
     case application:ensure_all_started(pooler) of
         {ok, _} -> ok;
         {error, _} = Error -> Error
@@ -84,6 +84,7 @@ add_pool(Poolname, Config) ->
         {cull_interval, CullInterval},
         {member_start_timeout, MemberStartTimeout}
     ],
+
 
     case pooler:new_pool(PoolerConfig) of
         {error, _} = Error ->
@@ -142,6 +143,23 @@ checkin(Poolname, Pid, Status) ->
 %% =============================================================================
 
 
+
+set_env() ->
+    case riak_pool_config:get(metrics_enabled, true) of
+        true ->
+            Env = [
+                {pooler, [
+                    {metrics_module, riak_pool_pooler_metrics},
+                    {metrics_api, exometer}
+                ]}
+            ],
+            ok = riak_pool_pooler_metrics:setup(),
+            ok = application:set_env(Env);
+        false ->
+            ok
+    end.
+
+
 %% @private
 coerce_status(ok) -> ok;
 coerce_status(fail) -> fail;
@@ -186,3 +204,4 @@ riak_opts(_) ->
         {keepalive, true},
         {connect_timeout, 2 * ?DEFAULT_TIMEOUT}
     ]).
+

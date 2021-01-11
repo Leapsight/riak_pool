@@ -8,6 +8,7 @@
     stdlib,
     riakc,
     backoff,
+    prometheus,
     app_config
    ]},
   {env,[]},

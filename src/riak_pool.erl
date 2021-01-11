@@ -31,6 +31,9 @@
 }).
 
 -type config()    ::  #{
+    backend => module(),
+    riak_host => string(),
+    riak_port => integer(),
     min_size => pos_integer(),
     max_size => pos_integer(),
     idle_removal_interval_secs => non_neg_integer(),
@@ -230,7 +233,8 @@ execute(Poolname, Fun, Opts)  ->
 
 
 %% -----------------------------------------------------------------------------
-%% @doc
+%% @doc Returns a Riak connection from the process
+%% dictonary or `undefined' if there is none.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec get_connection() -> undefined | pid().
@@ -239,8 +243,10 @@ get_connection() ->
     get(?CONNECTION_KEY).
 
 
+
 %% -----------------------------------------------------------------------------
-%% @doc
+%% @doc Returns `true' if there is a Riak connection stored in the process
+%% dictionary or `false' otherwise.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec has_connection() -> boolean().
@@ -257,23 +263,26 @@ has_connection() ->
 
 execute_state(Opts) ->
     Timeout = maps:get(timeout, Opts, 5000),
-    Deadline = maps:get(deadline, Opts, 60000),
     MaxRetries = maps:get(max_retries, Opts, 3),
+    Deadline0 = maps:get(deadline, Opts, 60000),
     Min = maps:get(retry_backoff_interval_min, Opts, 1000),
     Max = maps:get(retry_backoff_interval_max, Opts, 15000),
     Type = maps:get(retry_backoff_type, Opts, jitter),
 
     %% Quick validation
     is_integer(Timeout) andalso Timeout > 0 andalso
-    is_integer(Deadline) andalso Deadline > Timeout andalso
+    is_integer(Deadline0) andalso Deadline0 > Timeout andalso
     is_integer(MaxRetries) andalso MaxRetries >= 0 andalso
     is_integer(Min) andalso Min > 0 andalso
     is_integer(Max) andalso Max > Min andalso
     (Type == jitter orelse Type == normal)
     orelse error({badarg, Opts}),
 
+    %% Bound deadline
+    Deadline = deadline(Deadline0, Timeout, MaxRetries),
+
     State = #execute_state{
-        deadline = erlang:system_time(millisecond) + Deadline,
+        deadline = Deadline,
         timeout = Timeout,
         max_retries = MaxRetries
     },
@@ -360,3 +369,14 @@ cleanup() ->
     %% We cleanup the process dictionary
     _ = erase(?CONNECTION_KEY),
     ok.
+
+
+%% @private
+deadline(_, _, 0) ->
+    0;
+
+deadline(Deadline, Timeout, _) when Deadline > Timeout ->
+    erlang:system_time(millisecond) + Deadline;
+
+deadline(_, Timeout, Retries) ->
+    erlang:system_time(millisecond) + Timeout * Retries.

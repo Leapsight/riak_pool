@@ -27,4 +27,6 @@ Config = #{
     max_idle_secs => 30
 },
 ok = riak_pool:add_pool(my_pool, Config).
+
+riak_pool:execute(my_pool, fun(_) -> ok end, #{}).
 ```
