@@ -23,11 +23,15 @@
 -define(CONNECTION_KEY, connection).
 
 -record(execute_state, {
-    backoff             ::  backoff:backoff() | undefined,
-    deadline            ::  pos_integer(),
-    timeout             ::  non_neg_integer(),
-    max_retries         ::  non_neg_integer(),
-    retry_count = 0     ::  non_neg_integer()
+    backoff                     ::  backoff:backoff() | undefined,
+    deadline                    ::  pos_integer(),
+    timeout                     ::  non_neg_integer(),
+    max_retries                 ::  non_neg_integer(),
+    retry_count = 0             ::  non_neg_integer(),
+    opts                        ::  map(),
+    poolname                    ::  atom() | undefined,
+    connection                  ::  pid() | undefined,
+    cleanup_on_exit = false     ::  boolean()
 }).
 
 -type config()    ::  #{
@@ -104,7 +108,8 @@
 
 start() ->
     Mod = riak_pool_config:get(backend_mod),
-    Mod:start().
+    ok = Mod:start(),
+    maybe_add_pools().
 
 
 %% -----------------------------------------------------------------------------
@@ -228,8 +233,7 @@ checkin(Poolname, Pid, Status) ->
     {true, Result :: any()} | {false, Reason :: any()} | no_return().
 
 execute(Poolname, Fun, Opts)  ->
-    State = execute_state(Opts),
-    execute(Poolname, Fun, Opts, State).
+    do_execute(Fun, execute_state(Opts#{poolname => Poolname})).
 
 
 %% -----------------------------------------------------------------------------
@@ -262,84 +266,143 @@ has_connection() ->
 
 
 execute_state(Opts) ->
+    Poolname = maps:get(poolname, Opts, undefined),
+    Conn = maps:get(connection, Opts, undefined),
     Timeout = maps:get(timeout, Opts, 5000),
-    MaxRetries = maps:get(max_retries, Opts, 3),
-    Deadline0 = maps:get(deadline, Opts, 60000),
-    Min = maps:get(retry_backoff_interval_min, Opts, 1000),
-    Max = maps:get(retry_backoff_interval_max, Opts, 15000),
-    Type = maps:get(retry_backoff_type, Opts, jitter),
+    MaxRetries = maps:get(max_retries, Opts, 0),
 
-    %% Quick validation
-    is_integer(Timeout) andalso Timeout > 0 andalso
-    is_integer(Deadline0) andalso Deadline0 > Timeout andalso
-    is_integer(MaxRetries) andalso MaxRetries >= 0 andalso
-    is_integer(Min) andalso Min > 0 andalso
-    is_integer(Max) andalso Max > Min andalso
-    (Type == jitter orelse Type == normal)
-    orelse error({badarg, Opts}),
+    %% Validation
+    (
+        is_integer(MaxRetries) andalso MaxRetries >= 0
+        andalso is_integer(Timeout) andalso Timeout > 0
+    ) orelse error({badarg, Opts}),
 
-    %% Bound deadline
-    Deadline = deadline(Deadline0, Timeout, MaxRetries),
+
 
     State = #execute_state{
-        deadline = Deadline,
         timeout = Timeout,
-        max_retries = MaxRetries
+        max_retries = MaxRetries,
+        connection = Conn,
+        poolname = Poolname,
+        opts = Opts
     },
 
     case MaxRetries > 0 of
         true ->
-            B = backoff:type(backoff:init(Min, Max), Type),
-            State#execute_state{max_retries = MaxRetries, backoff = B};
+            Deadline0 = maps:get(deadline, Opts, 60000),
+            Min = maps:get(retry_backoff_interval_min, Opts, 1000),
+            Max = maps:get(retry_backoff_interval_max, Opts, 15000),
+            Type = maps:get(retry_backoff_type, Opts, jitter),
+
+            %% Validation
+            (
+                is_integer(Deadline0) andalso Deadline0 > Timeout
+                andalso is_integer(Min) andalso Min > 0
+                andalso is_integer(Max) andalso Max > Min
+                andalso (Type == jitter orelse Type == normal)
+            ) orelse error({badarg, Opts}),
+
+            %% Bound deadline
+            Deadline = deadline(Deadline0, Timeout, MaxRetries),
+            Backoff = backoff:type(backoff:init(Min, Max), Type),
+
+            State#execute_state{
+                deadline = Deadline,
+                backoff = Backoff
+            };
         false ->
+            %% Retries is disabled
             State
     end.
 
 
 %% @private
-execute(Poolname, Fun, Opts, State)  ->
-    case checkout(Poolname, Opts) of
-        {ok, Pid} ->
+do_execute(Fun, State)  ->
+    case maybe_checkout(State) of
+        {ok, Pid, NewState} ->
             try
-                %% At the moment we do not support nested calls to this function
-                %% so if a connection existed this call will fail
-                undefined = put(?CONNECTION_KEY, Pid),
                 Result = Fun(Pid),
-                ok = checkin(Poolname, Pid, ok),
+                ok = maybe_checkin(ok, NewState),
                 {true, Result}
             catch
                 _:EReason when EReason == timeout ->
-                    ok = checkin(Poolname, Pid, EReason),
+                    ok = maybe_checkin(EReason, NewState),
                     EResult = {true, {error, EReason}},
-                    maybe_retry(Poolname, Fun, Opts, State, EResult);
+                    maybe_retry(Fun, NewState, EResult);
                 _:EReason when EReason == overload ->
-                    ok = checkin(Poolname, Pid, EReason),
+                    ok = maybe_checkin(EReason, NewState),
                     {true, {error, EReason}};
                 _:EReason:Stacktrace ->
-                    ok = checkin(Poolname, Pid, fail),
+                    ok = maybe_checkin(fail, NewState),
                     error(EReason, Stacktrace)
             after
-                cleanup()
+                cleanup(NewState)
             end;
-        {error, busy} ->
+        {error, busy, NewState} ->
             Result = {false, busy},
-            maybe_retry(Poolname, Fun, Opts, State, Result);
-        {error, Reason} ->
+            maybe_retry(Fun, NewState, Result);
+        {error, Reason, _NewState} ->
             {false, Reason}
     end.
 
 
+%% -----------------------------------------------------------------------------
 %% @private
-maybe_retry(_, _, _, #execute_state{backoff = undefined}, Result) ->
+%% @doc Only checkout if the user has not provided a connection. Also only
+%% checkin on exit when a checkout was made.
+%% @end
+%% -----------------------------------------------------------------------------
+maybe_checkout(#execute_state{connection = undefined} = State) ->
+    %% If user has not provided a connection try to reuse an existing
+    %% connection checkout by this process already if any, and only then
+    %% checkout a connection
+    case get_connection() of
+        undefined ->
+            Poolname = State#execute_state.poolname,
+            Opts = State#execute_state.opts,
+
+            case checkout(Poolname, Opts) of
+                {ok, Pid} ->
+                    undefined = put(?CONNECTION_KEY, Pid),
+                    NewState = State#execute_state{
+                        connection = Pid,
+                        cleanup_on_exit = true
+                    },
+                    {ok, Pid, NewState};
+                {error, Reason} ->
+                    {error, Reason, State}
+            end;
+        Pid when is_pid(Pid) ->
+            NewState = State#execute_state{
+                connection = Pid,
+                cleanup_on_exit = false
+            },
+            {ok, Pid, NewState}
+    end;
+
+maybe_checkout(#execute_state{connection = Pid} = State) ->
+    {ok, Pid, State}.
+
+
+%% @private
+maybe_checkin(Reason, #execute_state{cleanup_on_exit = true} = S) ->
+    checkin(S#execute_state.poolname, S#execute_state.connection, Reason);
+
+maybe_checkin(_, _) ->
+    ok.
+
+
+%% @private
+maybe_retry(_, #execute_state{backoff = undefined}, Result) ->
     %% Retry disabled
     Result;
 
-maybe_retry(_, _, _, #execute_state{max_retries = N, retry_count = M}, Result)
+maybe_retry(_, #execute_state{max_retries = N, retry_count = M}, Result)
 when N < M ->
     %% We reached the max retry limit
     Result;
 
-maybe_retry(Poolname, Fun, Opts, State0, Result) ->
+maybe_retry(Fun, State0, Result) ->
     Now = erlang:system_time(millisecond),
     Deadline = State0#execute_state.deadline,
 
@@ -356,7 +419,7 @@ maybe_retry(Poolname, Fun, Opts, State0, Result) ->
                 delay => Delay
             }),
             ok = timer:sleep(Delay),
-            execute(Poolname, Fun, Opts, State1)
+            do_execute(Fun, State1)
     end.
 
 
@@ -365,9 +428,12 @@ maybe_retry(Poolname, Fun, Opts, State0, Result) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-cleanup() ->
+cleanup(#execute_state{cleanup_on_exit = true}) ->
     %% We cleanup the process dictionary
     _ = erase(?CONNECTION_KEY),
+    ok;
+
+cleanup(_) ->
     ok.
 
 
@@ -380,3 +446,32 @@ deadline(Deadline, Timeout, _) when Deadline > Timeout ->
 
 deadline(_, Timeout, Retries) ->
     erlang:system_time(millisecond) + Timeout * Retries.
+
+
+%% @private
+maybe_add_pools() ->
+    case riak_pool_config:get(pools, undefined) of
+        undefined ->
+            ok;
+        Pools when is_list(Pools) ->
+            ok = lists:foreach(
+                fun
+                    (#{name := Name} = Pool) ->
+                        Config = maps:without([name], Pool),
+                        case riak_pool:add_pool(default, Config) of
+                            ok ->
+                                ?LOG_INFO(#{
+                                    message => "Riak KV connection pool configured",
+                                    poolname => Name,
+                                    config => Pool
+                                }),
+                                ok;
+                            {error, Reason} ->
+                                throw(Reason)
+                        end;
+                    (Pool) ->
+                        throw({missing_poolname, Pool})
+                end,
+                Pools
+            )
+    end.
