@@ -217,20 +217,22 @@ checkin(Poolname, Pid, Status) ->
 %% and it is accessible via the {@link get_connection/0} function.
 %%
 %% The function returns:
-%% * `{true, Result}' when a connection was succesfully checked out from the
+%% * `{ok, Result}' when a connection was succesfully checked out from the
 %% pool `Poolname'. `Result' is is the value of the last expression in
 %% `Fun'.
-%% * `{false, Reason}' when the a connection could not be obtained from the
+%% * `{error, Reason}' when the a connection could not be obtained from the
 %% pool `Poolname'. `Reason' is `busy' when the pool runout of connections or `
 %% {error, Reason}' when it was a Riak connection error such as
 %% `{error, timeout}/ or `{error, overload}'.
-%% @end
+%%
+%% In the case of an exception the function will catch it, checkin any checked
+%% out connection and cleanup the state and finally raise the exception.
 %% -----------------------------------------------------------------------------
 -spec execute(
     Poolname :: atom(),
     Fun :: fun((RiakConn :: pid()) -> Result :: any()),
     Opts :: map()) ->
-    {true, Result :: any()} | {false, Reason :: any()} | no_return().
+    {ok, Result :: any()} | {error, Reason :: any()} | no_return().
 
 execute(Poolname, Fun, Opts)  ->
     do_execute(Fun, execute_state(Opts#{poolname => Poolname})).
@@ -321,28 +323,25 @@ do_execute(Fun, State)  ->
     case maybe_checkout(State) of
         {ok, Pid, NewState} ->
             try
-                Result = Fun(Pid),
-                ok = maybe_checkin(ok, NewState),
-                {true, Result}
+                {ok, Fun(Pid)}
             catch
-                _:EReason when EReason == timeout ->
-                    ok = maybe_checkin(EReason, NewState),
-                    EResult = {true, {error, EReason}},
-                    maybe_retry(Fun, NewState, EResult);
-                _:EReason when EReason == overload ->
-                    ok = maybe_checkin(EReason, NewState),
-                    {true, {error, EReason}};
-                _:EReason:Stacktrace ->
+                _:timeout ->
+                    ok = maybe_checkin(timeout, NewState),
+                    maybe_retry(Fun, NewState, {error, timeout});
+                _:overload ->
+                    ok = maybe_checkin(overload, NewState),
+                    {error, overload};
+                Class:Reason:Stacktrace ->
                     ok = maybe_checkin(fail, NewState),
-                    error(EReason, Stacktrace)
+                    erlang:raise(Class, Reason, Stacktrace)
             after
+                ok = maybe_checkin(ok, NewState),
                 cleanup(NewState)
             end;
         {error, busy, NewState} ->
-            Result = {false, busy},
-            maybe_retry(Fun, NewState, Result);
+            maybe_retry(Fun, NewState, {error, busy});
         {error, Reason, _NewState} ->
-            {false, Reason}
+            {error, Reason}
     end.
 
 

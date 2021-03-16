@@ -11,7 +11,9 @@
 all() ->
     [
         execute_with_user_connection,
-        execute_reuses_parent_connection
+        execute_reuses_parent_connection,
+        execute_errors,
+        execute_exceptions
     ].
 
 
@@ -40,7 +42,7 @@ execute_with_user_connection(_) ->
     ),
 
     ?assertEqual(
-        {true, true},
+        {ok, true},
         riak_pool:execute(
             does_not_exist,
             fun(Pid) -> Pid =:= Conn end,
@@ -50,11 +52,11 @@ execute_with_user_connection(_) ->
     ),
 
     ?assertEqual(
-        {true, ok},
+        {ok, ok},
         riak_pool:execute(
             default,
             fun(_) ->
-                {true, true} = riak_pool:execute(
+                {ok, true} = riak_pool:execute(
                     does_not_exist,
                     fun(Pid) -> Pid =:= Conn end,
                     #{connection => Conn}
@@ -70,11 +72,11 @@ execute_with_user_connection(_) ->
 
 execute_reuses_parent_connection(_) ->
     ?assertEqual(
-        {true, ok},
+        {ok, ok},
         riak_pool:execute(
             default,
             fun(Pid1) ->
-                {true, true} = riak_pool:execute(
+                {ok, true} = riak_pool:execute(
                     default,
                     fun(Pid2) -> Pid1 =:= Pid2 end,
                     #{}
@@ -84,11 +86,75 @@ execute_reuses_parent_connection(_) ->
             #{}
         )
     ),
+    connection_has_cleared().
+
+
+execute_errors(_) ->
+    ?assertEqual(
+        {error, timeout},
+        riak_pool:execute(
+            default,
+            fun(_) -> error(timeout) end,
+            #{}
+        ),
+        "If any pool or riak error occurs, execute will return an error tuple."
+    ),
+    connection_has_cleared(),
+
+    ?assertEqual(
+        {error, overload},
+        riak_pool:execute(
+            default,
+            fun(_) -> error(overload) end,
+            #{}
+        ),
+        "If any pool or riak error occurs, execute will return an error tuple."
+    ),
+    connection_has_cleared().
+
+
+execute_exceptions(_) ->
+    ?assertException(
+        error,
+        foo,
+        riak_pool:execute(
+            default,
+            fun(_) -> error(foo) end,
+            #{}
+        ),
+        "If any exception occurs, execute will raise the exception."
+    ),
+    connection_has_cleared(),
+
+    ?assertException(
+        throw,
+        foo,
+        riak_pool:execute(
+            default,
+            fun(_) -> throw(foo) end,
+            #{}
+        ),
+        "If any exception occurs, execute will raise the exception."
+    ),
+    connection_has_cleared(),
+
+    ?assertException(
+        exit,
+        foo,
+        riak_pool:execute(
+            default,
+            fun(_) -> exit(foo) end,
+            #{}
+        ),
+        "If any exception occurs, execute will raise the exception."
+    ),
+    connection_has_cleared().
+
+
+
+connection_has_cleared() ->
     ?assertEqual(
         undefined,
         riak_pool:get_connection(),
         "The connection was cleared from the process dictionary"
     ).
-
-
-
