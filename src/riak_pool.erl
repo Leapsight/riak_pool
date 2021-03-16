@@ -234,6 +234,12 @@ checkin(Poolname, Pid, Status) ->
     Opts :: map()) ->
     {ok, Result :: any()} | {error, Reason :: any()} | no_return().
 
+execute(undefined, Fun, #{connection := Pid} = Opts) when is_pid(Pid) ->
+    do_execute(Fun, execute_state(Opts#{poolname => undefined}));
+
+execute(undefined, _, _) ->
+    {error, invalid_poolname};
+
 execute(Poolname, Fun, Opts)  ->
     do_execute(Fun, execute_state(Opts#{poolname => Poolname})).
 

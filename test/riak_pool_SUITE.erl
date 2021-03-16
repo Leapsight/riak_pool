@@ -10,6 +10,7 @@
 
 all() ->
     [
+        execute_no_connection,
         execute_with_user_connection,
         execute_reuses_parent_connection,
         execute_errors,
@@ -25,6 +26,30 @@ init_per_suite(Config) ->
 end_per_suite(Config) ->
     meck:unload(),
     {save_config, Config}.
+
+
+execute_no_connection(_) ->
+    ?assertEqual(
+        {error, invalid_poolname},
+        riak_pool:execute(
+            undefined,
+            fun(_) -> ok end,
+            #{}
+        ),
+        "If poolname is undefined we need to have a connection"
+    ),
+
+    {ok, Conn} = riakc_pb_socket:start_link("127.0.0.1", 8087),
+    pong = riakc_pb_socket:ping(Conn),
+    ?assertEqual(
+        {ok, true},
+        riak_pool:execute(
+            undefined,
+            fun(Pid) -> Pid =:= Conn end,
+            #{connection => Conn}
+        ),
+        "If we pass a connection, poolname can be undefined"
+    ).
 
 
 execute_with_user_connection(_) ->
