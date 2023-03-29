@@ -44,7 +44,8 @@
     max_idle_secs => non_neg_integer()
 }.
 
--type opts()    ::  #{
+-type exec_opts()    ::  #{
+    connection => pid(),
     deadline => pos_integer(),
     timeout => pos_integer(),
     max_retries => non_neg_integer(),
@@ -53,14 +54,19 @@
     retry_backoff_type => jitter | normal
 }.
 
+-type exec_fun()    ::  fun((Connection :: pid()) -> Result :: any()).
+
+
 -export_type([config/0]).
--export_type([opts/0]).
+-export_type([exec_opts/0]).
+-export_type([exec_fun/0]).
 
 -export([add_pool/2]).
 -export([checkin/2]).
 -export([checkin/3]).
 -export([checkout/1]).
 -export([checkout/2]).
+-export([execute/2]).
 -export([execute/3]).
 -export([get_connection/0]).
 -export([has_connection/0]).
@@ -84,9 +90,10 @@
 
 -callback remove_pool(Poolname :: atom()) -> ok | {error, any()}.
 
--callback checkout(Poolname :: atom(), Opts :: opts()) ->
+-callback checkout(
+    Poolname :: atom(), Opts :: #{timeout => non_neg_integer()}) ->
     {ok, pid()}
-    | {error, busy | any()}
+    | {error,  busy | down | invalid_poolname | any()}
     | no_return().
 
 -callback checkin(
@@ -177,7 +184,7 @@ checkout(Poolname) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec checkout(Poolname :: atom(), Opts :: opts()) ->
+-spec checkout(Poolname :: atom(), Opts :: #{timeout => non_neg_integer()}) ->
     {ok, pid()} | {error, any()}.
 
 checkout(Poolname, Opts) ->
@@ -210,38 +217,59 @@ checkin(Poolname, Pid, Status) ->
 
 
 %% -----------------------------------------------------------------------------
+%% @doc Calls {@link execute/3} passing an empty options map.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec execute(Poolname :: atom(), Fun :: exec_fun()) ->
+    {ok, Result :: any()} | {error, Reason :: any()} | no_return().
+
+execute(Poolname, Fun) ->
+    execute(Poolname, Fun, #{}).
+
+
+%% -----------------------------------------------------------------------------
 %% @doc Executes a number of operations using the same Riak client connection
 %% from pool `Poolname'.
 %% The connection will be passed to the function object `Fun' and also
 %% temporarily stored in the process dictionary for the duration of the call
 %% and it is accessible via the {@link get_connection/0} function.
 %%
-%% The function returns:
-%% * `{ok, Result}' when a connection was succesfully checked out from the
-%% pool `Poolname'. `Result' is is the value of the last expression in
-%% `Fun'.
-%% * `{error, Reason}' when the a connection could not be obtained from the
-%% pool `Poolname'. `Reason' is `busy' when the pool runout of connections or `
-%% {error, Reason}' when it was a Riak connection error such as
-%% `{error, timeout}/ or `{error, overload}'.
+%% In case `Opts' has a `connection' key containing a pid(), this will be used
+%% instead. In this case the poolname might be `undefined' but no retries will
+%% be possible in case the passed connection is no longer healthy.
 %%
-%% In the case of an exception the function will catch it, checkin any checked
-%% out connection and cleanup the state and finally raise the exception.
+%% The function returns:
+%%
+%% <ul>
+%% <li>`{ok, Result}' when a connection was succesfully checked out from the
+%% pool `Poolname'. `Result' is is the value of the last expression in
+%% `Fun'.</li>
+%% <li>`{error, Reason}' when the a connection could not be obtained from the
+%% pool `Poolname'. `Reason' is `busy' when the pool run out of connections or `
+%% {error, Reason}' when it was a Riak connection error such as
+%% `{error, Reason}' where `Reason' might be `timeout', `disconnected' or
+%% `overload'.</li>
+%% <ul>
+%%
+%% In the case of failure if the exception reason is `timeout' or
+%% `disconnected' and `Opts' defined a retry strategy,
+%% a new connection will be obtained from the pool to retry the operation. If
+%% the exception reason is `overload' the function will return
+%% `{error, overload}'. Otherwise, the exception will be raised using the
+%% original class and reason while preserving the stacktrace.
+%%
+%% In all failure cases (whether a retry strategy was defined or not) all failed
+%% connections and newly checked out connections will be checked in and the
+%% process dictionary cleaned up before returning. This function supports
+%% nested calls, so it will not clean up a connection that was already in the
+%% process dictionary at the beginning of the call or has been passed using the
+%% option `connection' in `Opts'.
 %% -----------------------------------------------------------------------------
--spec execute(
-    Poolname :: atom(),
-    Fun :: fun((RiakConn :: pid()) -> Result :: any()),
-    Opts :: map()) ->
+-spec execute(Poolname :: atom(), Fun :: exec_fun(), Opts :: exec_opts()) ->
     {ok, Result :: any()} | {error, Reason :: any()} | no_return().
 
-execute(undefined, Fun, #{connection := Pid} = Opts) when is_pid(Pid) ->
-    do_execute(Fun, execute_state(Opts#{poolname => undefined}));
-
-execute(undefined, _, _) ->
-    {error, invalid_poolname};
-
-execute(Poolname, Fun, Opts)  ->
-    do_execute(Fun, execute_state(Opts#{poolname => Poolname})).
+execute(Poolname, Fun, Opts) when is_function(Fun, 1) ->
+    do_execute(Fun, init_execute_state(Poolname, Opts)).
 
 
 %% -----------------------------------------------------------------------------
@@ -273,9 +301,26 @@ has_connection() ->
 %% =============================================================================
 
 
-execute_state(Opts) ->
-    Poolname = maps:get(poolname, Opts, undefined),
-    Conn = maps:get(connection, Opts, undefined),
+%% @private
+-spec init_execute_state(atom(), exec_opts()) -> #execute_state{}.
+
+init_execute_state(Poolname, #{connection := Pid} = Opts) when is_pid(Pid) ->
+    case is_process_alive(Pid) of
+        true ->
+            init_execute_state(Poolname, Opts, Pid);
+        false ->
+            init_execute_state(undefined, maps:without(connection, Opts))
+    end;
+
+init_execute_state(Poolname, Opts) when is_map(Opts) ->
+    init_execute_state(Poolname, Opts, get_connection()).
+
+
+%% @private
+-spec init_execute_state(atom(), exec_opts(), pid() | undefined) ->
+    #execute_state{}.
+
+init_execute_state(Poolname, Opts, Connection) ->
     Timeout = maps:get(timeout, Opts, 5000),
     MaxRetries = maps:get(max_retries, Opts, 0),
 
@@ -286,11 +331,10 @@ execute_state(Opts) ->
     ) orelse error({badarg, Opts}),
 
 
-
     State = #execute_state{
         timeout = Timeout,
         max_retries = MaxRetries,
-        connection = Conn,
+        connection = Connection,
         poolname = Poolname,
         opts = Opts
     },
@@ -325,30 +369,47 @@ execute_state(Opts) ->
 
 
 %% @private
-do_execute(Fun, State)  ->
-    case maybe_checkout(State) of
-        {ok, Pid, NewState} ->
+do_execute(Fun, State0)  ->
+    case maybe_checkout(State0) of
+        {ok, Pid, State1} ->
             try
-                {ok, Fun(Pid)}
+                {ok, execute_apply(Fun, Pid)}
             catch
-                _:timeout ->
-                    ok = maybe_checkin(timeout, NewState),
-                    maybe_retry(Fun, NewState, {error, timeout});
                 _:overload ->
-                    ok = maybe_checkin(overload, NewState),
+                    _ = maybe_checkin(overload, State1),
                     {error, overload};
+
+                _:Reason when Reason == timeout orelse Reason == disconnected ->
+                    State = maybe_checkin(Reason, State1),
+                    maybe_retry(Fun, State, {error, Reason});
+
                 Class:Reason:Stacktrace ->
-                    ok = maybe_checkin(fail, NewState),
+                    _ = maybe_checkin(fail, State1),
                     erlang:raise(Class, Reason, Stacktrace)
+
             after
-                ok = maybe_checkin(ok, NewState),
-                cleanup(NewState)
+                FinalState = maybe_checkin(ok, State1),
+                cleanup(FinalState)
             end;
-        {error, busy, NewState} ->
-            maybe_retry(Fun, NewState, {error, busy});
-        {error, Reason, _NewState} ->
+
+        {error, busy, State} ->
+            maybe_retry(Fun, State, {error, busy});
+
+        {error, down, State} ->
+            maybe_retry(Fun, State, {error, down});
+
+        {error, Reason, _} ->
             {error, Reason}
     end.
+
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc A separate function to improve testing
+%% @end
+%% -----------------------------------------------------------------------------
+execute_apply(Fun, Pid) ->
+    Fun(Pid).
 
 
 %% -----------------------------------------------------------------------------
@@ -358,31 +419,19 @@ do_execute(Fun, State)  ->
 %% @end
 %% -----------------------------------------------------------------------------
 maybe_checkout(#execute_state{connection = undefined} = State) ->
-    %% If user has not provided a connection try to reuse an existing
-    %% connection checkout by this process already if any, and only then
-    %% checkout a connection
-    case get_connection() of
-        undefined ->
-            Poolname = State#execute_state.poolname,
-            Opts = State#execute_state.opts,
+    Poolname = State#execute_state.poolname,
+    Opts = State#execute_state.opts,
 
-            case checkout(Poolname, Opts) of
-                {ok, Pid} ->
-                    undefined = put(?CONNECTION_KEY, Pid),
-                    NewState = State#execute_state{
-                        connection = Pid,
-                        cleanup_on_exit = true
-                    },
-                    {ok, Pid, NewState};
-                {error, Reason} ->
-                    {error, Reason, State}
-            end;
-        Pid when is_pid(Pid) ->
+    case checkout(Poolname, Opts) of
+        {ok, Pid} ->
+            _ = put(?CONNECTION_KEY, Pid),
             NewState = State#execute_state{
                 connection = Pid,
-                cleanup_on_exit = false
+                cleanup_on_exit = true
             },
-            {ok, Pid, NewState}
+            {ok, Pid, NewState};
+        {error, Reason} ->
+            {error, Reason, State}
     end;
 
 maybe_checkout(#execute_state{connection = Pid} = State) ->
@@ -390,11 +439,23 @@ maybe_checkout(#execute_state{connection = Pid} = State) ->
 
 
 %% @private
-maybe_checkin(Reason, #execute_state{cleanup_on_exit = true} = S) ->
-    checkin(S#execute_state.poolname, S#execute_state.connection, Reason);
+maybe_checkin(ok, #execute_state{cleanup_on_exit = true} = S) ->
+    ok = checkin(S#execute_state.poolname, S#execute_state.connection, ok),
+    S#execute_state{connection = undefined};
 
-maybe_checkin(_, _) ->
-    ok.
+maybe_checkin(ok, #execute_state{cleanup_on_exit = false} = S) ->
+    S#execute_state{connection = undefined};
+
+maybe_checkin(timeout, #execute_state{} = S) ->
+    %% If we retry we reuse the same connection
+    S;
+
+maybe_checkin(Reason, #execute_state{cleanup_on_exit = true} = S) ->
+    %% Failed for other reason e.g. disconnect, so we remove the connection so
+    %% that if we retry we checckout another one.
+    ok = checkin(S#execute_state.poolname, S#execute_state.connection, Reason),
+    S#execute_state{connection = undefined}.
+
 
 
 %% @private
@@ -407,7 +468,7 @@ when N < M ->
     %% We reached the max retry limit
     Result;
 
-maybe_retry(Fun, State0, Result) ->
+maybe_retry(Fun, State0, {error, Reason} = Result) ->
     Now = erlang:system_time(millisecond),
     Deadline = State0#execute_state.deadline,
 
@@ -417,14 +478,24 @@ maybe_retry(Fun, State0, Result) ->
         false ->
             %% We will retry
             {Delay, B1} = backoff:fail(State0#execute_state.backoff),
-            N = State0#execute_state.retry_count,
-            State1 = State0#execute_state{backoff = B1, retry_count = N + 1},
+            N = State0#execute_state.retry_count + 1,
+            State1 = State0#execute_state{backoff = B1, retry_count = N},
+
+            State =
+                case Reason of
+                    disconnected ->
+                        State1#execute_state{connection = undefined};
+                    _ ->
+                        State1
+                end,
+
             ?LOG_INFO(#{
-                message => "Will retry riak pool execute",
+                message => "Will retry riak_pool:execute/3",
+                retry_count => N,
                 delay => Delay
             }),
             ok = timer:sleep(Delay),
-            do_execute(Fun, State1)
+            do_execute(Fun, State)
     end.
 
 
@@ -466,7 +537,8 @@ maybe_add_pools() ->
                         case riak_pool:add_pool(default, Config) of
                             ok ->
                                 ?LOG_INFO(#{
-                                    message => "Riak KV connection pool configured",
+                                    message =>
+                                        "Riak KV connection pool configured",
                                     poolname => Name,
                                     config => Pool
                                 }),

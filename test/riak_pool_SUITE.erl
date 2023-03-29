@@ -10,22 +10,34 @@
 
 all() ->
     [
+        connection_refused,
         execute_no_connection,
         execute_with_user_connection,
         execute_reuses_parent_connection,
         execute_errors,
-        execute_exceptions
+        execute_exceptions,
+        execute_timeout_retry,
+        execute_disconnected_retry
     ].
 
 
 init_per_suite(Config) ->
     meck:unload(),
     _ = application:ensure_all_started(riak_pool),
+    meck:new(riak_pool, [passthrough]),
     Config.
 
 end_per_suite(Config) ->
     meck:unload(),
     {save_config, Config}.
+
+
+connection_refused(_) ->
+    ?assertEqual(
+        {error, {tcp, econnrefused}},
+        riakc_pb_socket:start("127.0.0.1", 1972)
+    ).
+
 
 
 execute_no_connection(_) ->
@@ -56,8 +68,8 @@ execute_with_user_connection(_) ->
     {ok, Conn} = riakc_pb_socket:start_link("127.0.0.1", 8087),
     pong = riakc_pb_socket:ping(Conn),
 
-    ?assertExit(
-        {noproc, {gen_server, call, [does_not_exist, _, _]}},
+    ?assertEqual(
+        {error, invalid_poolname},
         riak_pool:execute(
             does_not_exist,
             fun(_) -> ok end,
@@ -119,7 +131,19 @@ execute_errors(_) ->
         {error, timeout},
         riak_pool:execute(
             default,
-            fun(_) -> error(timeout) end,
+            fun(_) -> throw(timeout) end,
+            #{}
+        ),
+        "If any pool or riak error occurs, execute will return an error tuple."
+    ),
+    connection_has_cleared(),
+
+
+    ?assertEqual(
+        {error, disconnected},
+        riak_pool:execute(
+            default,
+            fun(_) -> throw(disconnected) end,
             #{}
         ),
         "If any pool or riak error occurs, execute will return an error tuple."
@@ -130,7 +154,7 @@ execute_errors(_) ->
         {error, overload},
         riak_pool:execute(
             default,
-            fun(_) -> error(overload) end,
+            fun(_) -> throw(overload) end,
             #{}
         ),
         "If any pool or riak error occurs, execute will return an error tuple."
@@ -176,6 +200,22 @@ execute_exceptions(_) ->
     connection_has_cleared().
 
 
+execute_timeout_retry(Config) ->
+    execute_retry(Config, timeout).
+
+
+execute_disconnected_retry(Config) ->
+    execute_retry(Config, disconnected).
+
+
+
+
+%% =============================================================================
+%% UTILS
+%% =============================================================================
+
+
+
 
 connection_has_cleared() ->
     ?assertEqual(
@@ -183,3 +223,29 @@ connection_has_cleared() ->
         riak_pool:get_connection(),
         "The connection was cleared from the process dictionary"
     ).
+
+
+
+execute_retry(_, Reason) ->
+
+    dbg:tracer(), dbg:p(all,c),
+    dbg:tpl(riak_pool, execute_apply, []),
+    dbg:tpl(pooler, return_member, []),
+
+    ?assertEqual(
+        {error, Reason},
+        riak_pool:execute(
+            default,
+            fun(_) -> throw(Reason) end,
+            #{
+                deadline => 8000,
+                max_retries => 3,
+                retry_backoff_interval_min => 2000,
+                retry_backoff_interval_max => 3000,
+                retry_backoff_type => normal
+            }
+        ),
+        "If any pool or riak error occurs, execute will return an error tuple."
+    ),
+
+    connection_has_cleared().

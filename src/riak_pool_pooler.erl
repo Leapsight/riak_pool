@@ -1,7 +1,7 @@
 -module(riak_pool_pooler).
 -behaviour(riak_pool).
 
--define(DEFAULT_TIMEOUT, 60000).
+-define(DEFAULT_TIMEOUT, 5000).
 
 %% BEHAVIOUR CALLBACKS
 -export([add_pool/2]).
@@ -11,8 +11,6 @@
 -export([start/0]).
 -export([stop/0]).
 
-%% PRiVATE
--export([new_connection/3]).
 
 
 
@@ -77,7 +75,7 @@ add_pool(Poolname, Config) ->
         %% node
         %% {group, ?MODULE},
         {name, Poolname},
-        {start_mfa, {?MODULE, new_connection, [Host, Port, RiakOpts]}},
+        {start_mfa, {riakc_pb_socket, start_link, [Host, Port, RiakOpts]}},
         {init_count, InitCount},
         {max_count, MaxCount},
         {max_age, MaxAge},
@@ -87,10 +85,12 @@ add_pool(Poolname, Config) ->
 
 
     case pooler:new_pool(PoolerConfig) of
+        {ok, _Pid} ->
+            %% add poolname to knowns pools
+            ok = add_poolname(Poolname),
+            ok;
         {error, _} = Error ->
-            Error;
-        _ ->
-            ok
+            Error
     end.
 
 
@@ -102,6 +102,7 @@ add_pool(Poolname, Config) ->
 -spec remove_pool(Poolname :: atom()) -> ok | {error, any()}.
 
 remove_pool(Poolname) ->
+    ok = rm_poolname(Poolname),
     pooler:rm_pool(Poolname).
 
 
@@ -110,18 +111,25 @@ remove_pool(Poolname) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec checkout(Poolname :: atom(), Opts :: riak_pool:opts()) ->
-    {ok, pid()} | {error, any()}.
+-spec checkout(Poolname :: atom(), Opts :: #{timeout => non_neg_integer()}) ->
+    {ok, pid()} | {error, busy | down | invalid_poolname | any()}.
 
 checkout(Poolname, Opts) ->
     Timeout = maps:get(timeout, Opts, ?DEFAULT_TIMEOUT),
-    case pooler:take_member(Poolname, Timeout) of
+    try pooler:take_member(Poolname, Timeout) of
         Pid when is_pid(Pid) ->
             {ok, Pid};
         error_no_members ->
             {error, busy}
+    catch
+        exit:{noproc, _} ->
+            case lists:member(Poolname, riak_pool_config:get(poolnames)) of
+                true ->
+                    {error, down};
+                false ->
+                    {error, invalid_poolname}
+            end
     end.
-
 
 
 %% -----------------------------------------------------------------------------
@@ -133,7 +141,12 @@ checkout(Poolname, Opts) ->
 
 checkin(Poolname, Pid, Status) ->
     %% TODO Check for overload status and implement backpreassure
-    pooler:return_member(Poolname, Pid, coerce_status(Status)).
+    case erlang:is_process_alive(Pid) of
+        true ->
+            pooler:return_member(Poolname, Pid, coerce_status(Status));
+        false ->
+            pooler:return_member(Poolname, Pid, fail)
+    end.
 
 
 
@@ -144,6 +157,19 @@ checkin(Poolname, Pid, Status) ->
 
 
 
+%% @private
+add_poolname(Poolname) ->
+    Poolnames = [Poolname | riak_pool_config:get(poolnames, [])],
+    riak_pool_config:set(poolnames, Poolnames).
+
+
+%% @private
+rm_poolname(Poolname) ->
+    Poolnames = riak_pool_config:get(poolnames, []) -- [Poolname],
+    riak_pool_config:set(poolnames, Poolnames).
+
+
+%% @private
 set_env() ->
     case riak_pool_config:get(metrics_enabled, true) of
         true ->
@@ -164,17 +190,6 @@ set_env() ->
 coerce_status(ok) -> ok;
 coerce_status(fail) -> fail;
 coerce_status(_) -> fail.
-
-
-%% @private
-new_connection(Host, Port, RiakOpts) ->
-    case riakc_pb_socket:start_link(Host, Port, RiakOpts) of
-        {ok, Pid} ->
-            {ok, Pid};
-        {error, _} = Error ->
-             %% TODO Check for errors and implement backpreassure
-            Error
-    end.
 
 
 %% @private
