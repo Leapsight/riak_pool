@@ -1,6 +1,6 @@
 {application, riak_pool,
  [{description, "An OTP application"},
-  {vsn, "0.1.0"},
+  {vsn, "0.3.0"},
   {registered, []},
   {mod, {riak_pool_app, []}},
   {applications,
