@@ -8,7 +8,7 @@
     stdlib,
     riakc,
     backoff,
-    prometheus,
+    telemetry,
     app_config
    ]},
   {env,[]},

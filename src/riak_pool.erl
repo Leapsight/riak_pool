@@ -31,7 +31,16 @@
     opts                        ::  map(),
     poolname                    ::  atom() | undefined,
     connection                  ::  pid() | undefined,
+    event_name                  ::  telemetry:event_name() | undefined,
+    event_metadata              ::  telemetry:event_metadata(),
+    system_time                 ::  integer(),
+    start_time                  ::  integer(),
     cleanup_on_exit = false     ::  boolean()
+}).
+
+-record(riak_pool_result, {
+    value                       ::  any(),
+    metadata                    ::  telemetry:event_metadata()
 }).
 
 -type config()    ::  #{
@@ -46,6 +55,10 @@
 
 -type exec_opts()    ::  #{
     connection => pid(),
+    telemetry => #{
+        event_name => telemetry:event_name(),
+        event_metadata => telemetry:event_metadata()
+    },
     deadline => pos_integer(),
     timeout => pos_integer(),
     max_retries => non_neg_integer(),
@@ -54,7 +67,11 @@
     retry_backoff_type => jitter | normal
 }.
 
--type exec_fun()    ::  fun((Connection :: pid()) -> Result :: any()).
+-type exec_fun()            ::  fun((Connection :: pid()) ->
+                                Result :: any())
+                                | result_with_meta().
+
+-opaque result_with_meta() ::   #riak_pool_result{}.
 
 
 -export_type([config/0]).
@@ -71,9 +88,9 @@
 -export([get_connection/0]).
 -export([has_connection/0]).
 -export([remove_pool/1]).
+-export([result/2]).
 -export([start/0]).
 -export([stop/0]).
-
 
 
 %% =============================================================================
@@ -264,12 +281,37 @@ execute(Poolname, Fun) ->
 %% nested calls, so it will not clean up a connection that was already in the
 %% process dictionary at the beginning of the call or has been passed using the
 %% option `connection' in `Opts'.
+%%
+%% == Telemetry ==
+%% This function will emmit start and stop/exception events. This works
+%% similarly to {@link telemetry:span/3} with the difference that this function
+%% provides additional measurements such as the number of retries performed.
+%%
+%% If the function `Fun' returns a `result_with_meta()' object (constructed
+%% using {@link result/2}, then the stop event will be emmitted using the
+%% metadata provided merged with the default metadata provided by this
+%% function.)
 %% -----------------------------------------------------------------------------
 -spec execute(Poolname :: atom(), Fun :: exec_fun(), Opts :: exec_opts()) ->
     {ok, Result :: any()} | {error, Reason :: any()} | no_return().
 
 execute(Poolname, Fun, Opts) when is_function(Fun, 1) ->
     do_execute(Fun, init_execute_state(Poolname, Opts)).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec result(Value :: any(), Meta :: telemetry:event_metadata()) ->
+    result_with_meta().
+
+result(Value, Meta) when is_map(Meta) ->
+    #riak_pool_result{
+        value = Value,
+        metadata = Meta
+    }.
+
 
 
 %% -----------------------------------------------------------------------------
@@ -323,6 +365,7 @@ init_execute_state(Poolname, Opts) when is_map(Opts) ->
 init_execute_state(Poolname, Opts, Connection) ->
     Timeout = maps:get(timeout, Opts, 5000),
     MaxRetries = maps:get(max_retries, Opts, 0),
+    CtxtMaker = fun() -> erlang:make_ref() end,
 
     %% Validation
     (
@@ -331,11 +374,30 @@ init_execute_state(Poolname, Opts, Connection) ->
     ) orelse error({badarg, Opts}),
 
 
+    {EventName, EventMetadata} =
+        case maps:find(telemetry, Opts) of
+            {ok, #{event_name := Name, event_metadata := Meta}} ->
+                {Name, merge_ctx(Meta, CtxtMaker)};
+
+            {ok, #{event_name := Name}} ->
+                {Name, merge_ctx(#{}, CtxtMaker)};
+
+            error ->
+                Name = [riak_pool, execute],
+                Meta = merge_ctx(#{}, CtxtMaker),
+                {Name, Meta}
+        end,
+
+
     State = #execute_state{
         timeout = Timeout,
         max_retries = MaxRetries,
         connection = Connection,
         poolname = Poolname,
+        event_name = EventName,
+        event_metadata = EventMetadata,
+        system_time = erlang:system_time(),
+        start_time = erlang:monotonic_time(),
         opts = Opts
     },
 
@@ -373,13 +435,16 @@ do_execute(Fun, State0)  ->
     case maybe_checkout(State0) of
         {ok, Pid, State1} ->
             try
-                {ok, execute_apply(Fun, Pid)}
+                {ok, execute_apply(Fun, Pid, State1)}
             catch
                 _:overload ->
+                    %% Transient failure but we shouldn't retry. Let the user
+                    %% handle the situation
                     _ = maybe_checkin(overload, State1),
                     {error, overload};
 
                 _:Reason when Reason == timeout orelse Reason == disconnected ->
+                    %% Transient failure, we will retry (if enabled)
                     State = maybe_checkin(Reason, State1),
                     maybe_retry(Fun, State, {error, Reason});
 
@@ -408,9 +473,121 @@ do_execute(Fun, State0)  ->
 %% @doc A separate function to improve testing
 %% @end
 %% -----------------------------------------------------------------------------
-execute_apply(Fun, Pid) ->
-    Fun(Pid).
+execute_apply(Fun, Pid, #execute_state{event_name = undefined}) ->
+    Fun(Pid);
 
+execute_apply(Fun, Pid, #execute_state{} = State) ->
+    %% We do not use telemetry:span/3 as we want to add additional measurements
+    %% to the event e.g. retries
+    %% Send start event
+    telemetry:execute(
+        State#execute_state.event_name ++ [start],
+        #{
+            monotonic_time => State#execute_state.start_time,
+            system_time => State#execute_state.system_time
+        },
+        State#execute_state.event_metadata
+    ),
+
+    try Fun(Pid) of
+        #riak_pool_result{value = Val, metadata = StopMeta0} ->
+            execute_stop(Val, StopMeta0, State);
+
+        Val ->
+            execute_stop(Val, #{}, State)
+
+    catch
+        Class:Reason:Stacktrace ->
+            execute_exception(Class, Reason, Stacktrace, State)
+    end.
+
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+execute_stop(Result, StopMeta0, #execute_state{} = State) ->
+    StopTime = erlang:monotonic_time(),
+    DefaultCtxt = maps:get(
+        telemetry_span_context, State#execute_state.event_metadata
+    ),
+
+    StopMeta1 = merge_ctx(StopMeta0, DefaultCtxt),
+    StopMeta = merge_meta(StopMeta1, State),
+
+    telemetry:execute(
+        State#execute_state.event_name ++ [stop],
+        #{
+            retries => State#execute_state.retry_count,
+            duration => StopTime - State#execute_state.start_time,
+            monotonic_time => StopTime
+        },
+        StopMeta
+    ),
+    Result.
+
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+execute_exception(Class, Reason, Stacktrace, State) ->
+    StopTime = erlang:monotonic_time(),
+    DefaultCtxt = maps:get(
+        telemetry_span_context, State#execute_state.event_metadata
+    ),
+
+    StopMeta0 = #{
+        kind => Class,
+        reason => Reason,
+        stacktrace => Stacktrace
+    },
+    StopMeta1 = merge_ctx(StopMeta0, DefaultCtxt),
+    StopMeta = merge_meta(StopMeta1, State),
+
+    telemetry:execute(
+        State#execute_state.event_name ++ [exception],
+        #{
+            retries => State#execute_state.retry_count,
+            duration => StopTime - State#execute_state.start_time,
+            monotonic_time => StopTime
+        },
+        StopMeta
+    ),
+    erlang:raise(Class, Reason, Stacktrace).
+
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec merge_ctx(telemetry:event_metadata(), fun(() -> any()) | any()) ->
+    telemetry:event_metadata().
+
+merge_ctx(#{telemetry_span_context := _} = Metadata, _) ->
+    Metadata;
+
+merge_ctx(Metadata, MakeCtxt) when is_function(MakeCtxt, 0) ->
+    maps:put(telemetry_span_context, MakeCtxt(), Metadata);
+
+merge_ctx(Metadata, Ctxt) ->
+    maps:put(telemetry_span_context, Ctxt, Metadata).
+
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+merge_meta(Metadata, State) ->
+    Metadata#{
+        poolname => State#execute_state.poolname,
+        deadline => State#execute_state.deadline,
+        max_retries => State#execute_state.max_retries
+    }.
 
 %% -----------------------------------------------------------------------------
 %% @private
@@ -454,6 +631,9 @@ maybe_checkin(Reason, #execute_state{cleanup_on_exit = true} = S) ->
     %% Failed for other reason e.g. disconnect, so we remove the connection so
     %% that if we retry we checckout another one.
     ok = checkin(S#execute_state.poolname, S#execute_state.connection, Reason),
+    S#execute_state{connection = undefined};
+
+maybe_checkin(_, S) ->
     S#execute_state{connection = undefined}.
 
 

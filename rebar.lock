@@ -14,7 +14,7 @@
   3},
  {<<"pooler">>,
   {git,"https://github.com/epgsql/pooler.git",
-       {ref,"b8c260122fa93b1893fb670af8b36604052036c5"}},
+       {ref,"fd754eb9a4200db9aa6cd6407e33142408fdb57d"}},
   0},
  {<<"prometheus">>,{pkg,<<"prometheus">>,<<"4.6.0">>},0},
  {<<"protobuffs">>,
@@ -28,12 +28,15 @@
  {<<"riakc">>,
   {git,"https://github.com/basho/riak-erlang-client.git",
        {ref,"3b6ad6e92dcb55833e9add829b2871be8468a68e"}},
-  0}]}.
+  0},
+ {<<"telemetry">>,{pkg,<<"telemetry">>,<<"1.2.1">>},0}]}.
 [
 {pkg_hash,[
  {<<"backoff">>, <<"83B72ED2108BA1EE8F7D1C22E0B4A00CFE3593A67DBC792799E8CCE9F42F796B">>},
- {<<"prometheus">>, <<"20510F381DB1CCAB818B4CF2FAC5FA6AB5CC91BC364A154399901C001465F46F">>}]},
+ {<<"prometheus">>, <<"20510F381DB1CCAB818B4CF2FAC5FA6AB5CC91BC364A154399901C001465F46F">>},
+ {<<"telemetry">>, <<"68FDFE8D8F05A8428483A97D7AAB2F268AAFF24B49E0F599FAA091F1D4E7F61C">>}]},
 {pkg_hash_ext,[
  {<<"backoff">>, <<"CF0CFFF8995FB20562F822E5CC47D8CCF664C5ECDC26A684CBE85C225F9D7C39">>},
- {<<"prometheus">>, <<"4905FD2992F8038ECCD7AA0CD22F40637ED618C0BED1F75C05AACEC15B7545DE">>}]}
+ {<<"prometheus">>, <<"4905FD2992F8038ECCD7AA0CD22F40637ED618C0BED1F75C05AACEC15B7545DE">>},
+ {<<"telemetry">>, <<"DAD9CE9D8EFFC621708F99EAC538EF1CBE05D6A874DD741DE2E689C47FEAFED5">>}]}
 ].
