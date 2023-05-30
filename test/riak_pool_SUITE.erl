@@ -228,10 +228,6 @@ connection_has_cleared() ->
 
 execute_retry(_, Reason) ->
 
-    dbg:tracer(), dbg:p(all,c),
-    dbg:tpl(riak_pool, execute_apply, []),
-    dbg:tpl(pooler, return_member, []),
-
     ?assertEqual(
         {error, Reason},
         riak_pool:execute(
