@@ -382,7 +382,8 @@ init_execute_state(Poolname, Opts, Connection) ->
             {ok, #{event_name := Name}} ->
                 {Name, merge_ctx(#{}, CtxtMaker)};
 
-            error ->
+            _ ->
+                %% {ok, #{}} or error
                 Name = [riak_pool, execute],
                 Meta = merge_ctx(#{}, CtxtMaker),
                 {Name, Meta}
